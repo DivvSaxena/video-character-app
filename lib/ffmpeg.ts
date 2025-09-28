@@ -58,16 +58,16 @@ export async function loadFonts(): Promise<void> {
     }
     
     // Option 2: Load a basic TrueType font (fallback)
-    try {
-      const liberationUrl = 'https://github.com/liberationfonts/liberation-fonts/raw/master/liberation-fonts-ttf-2.1.5/LiberationSans-Regular.ttf';
-      const liberationResponse = await fetch(liberationUrl);
-      if (liberationResponse.ok) {
-        const liberationData = await liberationResponse.arrayBuffer();
-        await ffmpeg.writeFile('liberation.ttf', new Uint8Array(liberationData));
-      }
-    } catch (error) {
-      console.warn('⚠️ Failed to load Liberation font:', error);
-    }
+    // try {
+    //   const liberationUrl = 'https://github.com/liberationfonts/liberation-fonts/raw/master/liberation-fonts-ttf-2.1.5/LiberationSans-Regular.ttf';
+    //   const liberationResponse = await fetch(liberationUrl);
+    //   if (liberationResponse.ok) {
+    //     const liberationData = await liberationResponse.arrayBuffer();
+    //     await ffmpeg.writeFile('liberation.ttf', new Uint8Array(liberationData));
+    //   }
+    // } catch (error) {
+    //   console.warn('⚠️ Failed to load Liberation font:', error);
+    // }
     
     fontsLoaded = true;
     
