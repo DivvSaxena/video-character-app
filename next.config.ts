@@ -17,9 +17,7 @@ const nextConfig = {
       },
     ];
   },
-  experimental: {
-    serverComponentsExternalPackages: ['@ffmpeg/ffmpeg', '@ffmpeg/util']
-  },
+      serverExternalPackages: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
   webpack: (config: any) => {
     config.resolve.fallback = {
       ...config.resolve.fallback,

@@ -37,9 +37,23 @@ export default function CharacterSelector({
   };
 
   const updateCharacter = (id: number, updates: Partial<Character>) => {
-    setCharacters(characters.map(char => 
-      char.id === id ? { ...char, ...updates } : char
-    ));
+    setCharacters(characters.map(char => {
+      if (char.id === id) {
+        const updatedChar = { ...char, ...updates };
+        
+        // Ensure position stays within video boundaries with margin to prevent text cutoff
+        const margin = 5; // 5% margin from edges
+        if (updates.x !== undefined) {
+          updatedChar.x = Math.max(margin, Math.min(100 - margin, updates.x));
+        }
+        if (updates.y !== undefined) {
+          updatedChar.y = Math.max(margin, Math.min(100 - margin, updates.y));
+        }
+        
+        return updatedChar;
+      }
+      return char;
+    }));
   };
 
   return (
@@ -106,6 +120,32 @@ export default function CharacterSelector({
                 
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div>
+                    <label className="text-blue-200 block">X Position</label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      step="1"
+                      value={character.x}
+                      onChange={(e) => updateCharacter(character.id, { x: parseInt(e.target.value) })}
+                      className="w-full"
+                    />
+                    <div className="text-xs text-gray-400 mt-1">{character.x}%</div>
+                  </div>
+                  <div>
+                    <label className="text-blue-200 block">Y Position</label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="95"
+                      step="1"
+                      value={character.y}
+                      onChange={(e) => updateCharacter(character.id, { y: parseInt(e.target.value) })}
+                      className="w-full"
+                    />
+                    <div className="text-xs text-gray-400 mt-1">{character.y}%</div>
+                  </div>
+                  <div>
                     <label className="text-blue-200 block">Scale</label>
                     <input
                       type="range"
@@ -116,6 +156,7 @@ export default function CharacterSelector({
                       onChange={(e) => updateCharacter(character.id, { scale: parseFloat(e.target.value) })}
                       className="w-full"
                     />
+                    <div className="text-xs text-gray-400 mt-1">{character.scale}x</div>
                   </div>
                   <div>
                     <label className="text-blue-200 block">Rotation</label>
@@ -127,6 +168,7 @@ export default function CharacterSelector({
                       onChange={(e) => updateCharacter(character.id, { rotation: parseInt(e.target.value) })}
                       className="w-full"
                     />
+                    <div className="text-xs text-gray-400 mt-1">{character.rotation}°</div>
                   </div>
                 </div>
               </div>

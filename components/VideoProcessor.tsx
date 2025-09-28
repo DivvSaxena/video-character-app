@@ -27,15 +27,60 @@ export default function VideoProcessor({
   const [isDebugging, setIsDebugging] = useState(false);
   const [editingCharacter, setEditingCharacter] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
+  const [draggingCharacter, setDraggingCharacter] = useState<number | null>(null);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   
   const { isLoaded, isLoading, error: ffmpegError } = useFFmpeg();
 
-  const addCharacter = (event: React.MouseEvent<HTMLVideoElement>) => {
-    if (!videoRef.current) return;
+  // Helper function to calculate video content area and offsets
+  const getVideoContentArea = () => {
+    if (!videoRef.current) return null;
     
-    const rect = videoRef.current.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * 100;
-    const y = ((event.clientY - rect.top) / rect.height) * 100;
+    const video = videoRef.current;
+    const rect = video.getBoundingClientRect();
+    
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const elementWidth = rect.width;
+    const elementHeight = rect.height;
+    
+    const videoAspectRatio = videoWidth / videoHeight;
+    const elementAspectRatio = elementWidth / elementHeight;
+    
+    let contentWidth, contentHeight, offsetX, offsetY;
+    
+    if (videoAspectRatio > elementAspectRatio) {
+      // Video is wider than element - letterboxing on top/bottom
+      contentWidth = elementWidth;
+      contentHeight = elementWidth / videoAspectRatio;
+      offsetX = 0;
+      offsetY = (elementHeight - contentHeight) / 2;
+    } else {
+      // Video is taller than element - letterboxing on left/right
+      contentHeight = elementHeight;
+      contentWidth = elementHeight * videoAspectRatio;
+      offsetX = (elementWidth - contentWidth) / 2;
+      offsetY = 0;
+    }
+    
+    return { contentWidth, contentHeight, offsetX, offsetY, rect };
+  };
+
+  const addCharacter = (event: React.MouseEvent<HTMLVideoElement>) => {
+    const contentArea = getVideoContentArea();
+    if (!contentArea) return;
+    
+    const { contentWidth, contentHeight, offsetX, offsetY, rect } = contentArea;
+    
+    // Calculate position relative to actual video content
+    const relativeX = event.clientX - rect.left - offsetX;
+    const relativeY = event.clientY - rect.top - offsetY;
+    
+    // Convert to percentage of actual video content
+    const marginX = 5; // 5% margin from edges
+    const marginY = 5; // 5% margin from edges
+    const x = Math.max(marginX, Math.min(100 - marginX, (relativeX / contentWidth) * 100));
+    const y = Math.max(marginY, Math.min(100 - marginY, (relativeY / contentHeight) * 100));
     
     // Prompt user for text input
     const text = prompt('Enter text to add to the video:');
@@ -80,6 +125,42 @@ export default function VideoProcessor({
     setEditText('');
   };
 
+  const handleMouseDown = (e: React.MouseEvent, characterId: number) => {
+    e.stopPropagation();
+    setDraggingCharacter(characterId);
+    setDragStart({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!draggingCharacter || !dragStart) return;
+    
+    const contentArea = getVideoContentArea();
+    if (!contentArea) return;
+    
+    const { contentWidth, contentHeight, offsetX, offsetY, rect } = contentArea;
+    
+    // Calculate position relative to actual video content
+    const relativeX = e.clientX - rect.left - offsetX;
+    const relativeY = e.clientY - rect.top - offsetY;
+    
+    // Convert to percentage of actual video content
+    const marginX = 5; // 5% margin from edges
+    const marginY = 5; // 5% margin from edges
+    const newX = Math.max(marginX, Math.min(100 - marginX, (relativeX / contentWidth) * 100));
+    const newY = Math.max(marginY, Math.min(100 - marginY, (relativeY / contentHeight) * 100));
+    
+    setCharacters(characters.map(c => 
+      c.id === draggingCharacter 
+        ? { ...c, x: newX, y: newY }
+        : c
+    ));
+  };
+
+  const handleMouseUp = () => {
+    setDraggingCharacter(null);
+    setDragStart(null);
+  };
+
   const runDebug = async () => {
     if (!isLoaded) {
       alert('FFmpeg not loaded yet');
@@ -89,7 +170,6 @@ export default function VideoProcessor({
     setIsDebugging(true);
     try {
       await debugFFmpeg();
-      console.log('Debug completed - check console for details');
     } catch (error) {
       console.error('Debug failed:', error);
     } finally {
@@ -108,20 +188,11 @@ export default function VideoProcessor({
     setError(null);
     
     try {
-      console.log('=== Starting Video Processing ===');
-      console.log('Video details:', {
-        name: uploadedVideo.name,
-        size: uploadedVideo.size,
-        type: uploadedVideo.type,
-        lastModified: new Date(uploadedVideo.lastModified)
-      });
-      
       const processedBlob = await addCharacterOverlays(
         uploadedVideo, 
         characters,
         (progress) => {
           setProcessingProgress(progress * 100);
-          console.log('Processing progress:', progress * 100, '%');
         }
       );
       
@@ -132,8 +203,11 @@ export default function VideoProcessor({
       
       const processedUrl = URL.createObjectURL(processedBlob);
       setProcessedVideoUrl(processedUrl);
-      console.log('✅ Video processing completed successfully!');
-      console.log('Processed blob size:', processedBlob.size, 'bytes');
+      
+      // Check if we got a valid blob
+      if (processedBlob.size === 0) {
+        throw new Error('Video processing produced empty result');
+      }
       
     } catch (error) {
       console.error('❌ Video processing failed:', error);
@@ -168,19 +242,36 @@ export default function VideoProcessor({
             controls
             className="w-full rounded-lg cursor-crosshair"
             onClick={addCharacter}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
           />
           
-          {characters.map((character) => (
-            <div
-              key={character.id}
-              className="absolute cursor-pointer hover:scale-110 transition-transform group"
-              style={{
-                left: `${character.x}%`,
-                top: `${character.y}%`,
-                transform: `translate(-50%, -50%) scale(${character.scale}) rotate(${character.rotation}deg)`,
-                fontSize: '2rem'
-              }}
-            >
+          {characters.map((character) => {
+            const contentArea = getVideoContentArea();
+            if (!contentArea) return null;
+            
+            const { contentWidth, contentHeight, offsetX, offsetY, rect } = contentArea;
+            
+            // Convert percentage to actual pixels within the video content area
+            const actualX = (character.x / 100) * contentWidth + offsetX;
+            const actualY = (character.y / 100) * contentHeight + offsetY;
+            
+            // Convert to percentage of the video element
+            const elementX = (actualX / rect.width) * 100;
+            const elementY = (actualY / rect.height) * 100;
+            
+            return (
+              <div
+                key={character.id}
+                className="absolute cursor-pointer hover:scale-110 transition-transform group"
+                style={{
+                  left: `${elementX}%`,
+                  top: `${elementY}%`,
+                  transform: `translate(-50%, -50%) scale(${character.scale}) rotate(${character.rotation}deg)`,
+                  fontSize: '2rem'
+                }}
+              >
               {editingCharacter === character.id ? (
                 <div className="bg-black/80 p-2 rounded-lg">
                   <input
@@ -212,6 +303,7 @@ export default function VideoProcessor({
                 </div>
               ) : (
                 <div
+                  onMouseDown={(e) => handleMouseDown(e, character.id)}
                   onClick={(e) => {
                     e.stopPropagation();
                     removeCharacter(character.id);
@@ -220,20 +312,29 @@ export default function VideoProcessor({
                     e.stopPropagation();
                     startEditingCharacter(character);
                   }}
-                  className="relative bg-black/70 text-white px-2 py-1 rounded border border-white/30"
+                  className={`relative bg-black/70 text-white px-2 py-1 rounded border border-white/30 ${
+                    draggingCharacter === character.id ? 'cursor-grabbing' : 'cursor-grab'
+                  } ${
+                    (character.x <= 7 || character.x >= 93 || character.y <= 7 || character.y >= 93) 
+                      ? 'border-yellow-400' : 'border-white/30'
+                  }`}
                   style={{ fontSize: '0.9rem' }}
                 >
                   {character.text || character.emoji}
                   <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                    Double-click to edit text
+                    Drag to move • Double-click to edit • Click to remove
+                    {(character.x <= 7 || character.x >= 93 || character.y <= 7 || character.y >= 93) && (
+                      <div className="text-yellow-300 mt-1">⚠️ Near video edge</div>
+                    )}
                   </div>
                 </div>
               )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
           
           <div className="absolute bottom-2 left-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
-            Click on video to add text overlay
+            Click on video content to add text • Drag to move • Double-click to edit
           </div>
         </div>
       </div>
@@ -348,11 +449,10 @@ export default function VideoProcessor({
         <div className="font-medium mb-1">Current Status:</div>
         Based on your video (1088x1920), the app will try:
         <div className="mt-1 text-xs">
-          1. Full text overlays (your custom text)<br/>
-          2. Simple text overlay (minimal font)<br/>  
-          3. Basic "TEST" text overlay<br/>
-          4. Safe video re-encoding<br/>
-          5. Original video (last resort)
+          1. Text overlays with system fonts<br/>
+          2. Simple text overlay (yellow text)<br/>  
+          3. Canvas-based text overlay<br/>
+          4. Safe video copy (fallback)
         </div>
         <div className="mt-2 text-xs text-yellow-300">
           💡 If you get memory errors, try a smaller video file (&lt;50MB)

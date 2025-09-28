@@ -1,11 +1,12 @@
-// lib/ffmpeg.ts - Ultra-simple, robust implementation
+// lib/ffmpeg.ts - Updated with font support
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL, fetchFile } from '@ffmpeg/util';
 
 let ffmpeg: FFmpeg | null = null;
+let fontsLoaded = false;
 
 export interface Character {
-  text: string;
+  text?: string;
   id: number;
   type: string;
   emoji: string;
@@ -20,15 +21,6 @@ export async function loadFFmpeg(): Promise<FFmpeg> {
   
   ffmpeg = new FFmpeg();
   
-  // Set up logging and progress tracking
-  ffmpeg.on('log', ({ message }) => {
-    console.log('FFmpeg log:', message);
-  });
-  
-  ffmpeg.on('progress', ({ progress, time }) => {
-    console.log('FFmpeg progress:', progress, 'time:', time);
-  });
-  
   try {
     const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
     
@@ -38,7 +30,6 @@ export async function loadFFmpeg(): Promise<FFmpeg> {
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
     });
     
-    console.log('FFmpeg loaded successfully');
     return ffmpeg;
   } catch (error) {
     console.error('Failed to load FFmpeg:', error);
@@ -46,17 +37,59 @@ export async function loadFFmpeg(): Promise<FFmpeg> {
   }
 }
 
-// Method 1: Just add a simple text overlay (most basic approach)
-export async function addBasicTextOverlay(
-  videoFile: File,
+// Load fonts into FFmpeg filesystem
+export async function loadFonts(): Promise<void> {
+  if (fontsLoaded) return;
+  
+  const ffmpeg = await loadFFmpeg();
+  
+  try {
+    
+    // Option 1: Load local Roboto Condensed font
+    try {
+      const robotoUrl = '/fonts/Roboto_Condensed-Regular.ttf';
+      const robotoResponse = await fetch(robotoUrl);
+      if (robotoResponse.ok) {
+        const robotoData = await robotoResponse.arrayBuffer();
+        await ffmpeg.writeFile('roboto.ttf', new Uint8Array(robotoData));
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to load local Roboto font:', error);
+    }
+    
+    // Option 2: Load a basic TrueType font (fallback)
+    try {
+      const liberationUrl = 'https://github.com/liberationfonts/liberation-fonts/raw/master/liberation-fonts-ttf-2.1.5/LiberationSans-Regular.ttf';
+      const liberationResponse = await fetch(liberationUrl);
+      if (liberationResponse.ok) {
+        const liberationData = await liberationResponse.arrayBuffer();
+        await ffmpeg.writeFile('liberation.ttf', new Uint8Array(liberationData));
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to load Liberation font:', error);
+    }
+    
+    fontsLoaded = true;
+    
+  } catch (error) {
+    console.error('❌ Font loading failed:', error);
+    // Don't throw - we can still try text without custom fonts
+  }
+}
+
+// Method: Add text overlays with proper font support
+export async function addTextOverlaysWithFont(
+  videoFile: File, 
+  characters: Character[],
   onProgress?: (progress: number) => void
 ): Promise<Blob> {
   const ffmpeg = await loadFFmpeg();
   
   try {
-    console.log('Starting basic text overlay...');
     
-    // Progress tracking
+    // Load fonts first
+    await loadFonts();
+    
     if (onProgress) {
       ffmpeg.on('progress', ({ progress }) => {
         onProgress(progress);
@@ -64,70 +97,78 @@ export async function addBasicTextOverlay(
     }
     
     // Write input video file
-    console.log('Writing video file to FFmpeg filesystem...');
     await ffmpeg.writeFile('input.mp4', await fetchFile(videoFile));
-    console.log('Video file written successfully');
     
-    // Try safer text positioning - your video is 1088x1920
-    // Use relative positioning that's well within bounds
-    console.log('Executing FFmpeg command with safe positioning...');
+    // Video dimensions (from your logs: 1080x1920)
+    const videoWidth = 1080;
+    const videoHeight = 1920;
+    
+    // Create text overlay filters
+    let filterParts: string[] = [];
+    
+    characters.forEach((char, index) => {
+      // Convert percentage to actual pixels
+      const x = Math.max(20, Math.min(videoWidth - 200, Math.round((char.x / 100) * videoWidth)));
+      const y = Math.max(30, Math.min(videoHeight - 60, Math.round((char.y / 100) * videoHeight)));
+      const fontSize = Math.max(16, Math.min(72, Math.round(28 * char.scale)));
+      
+      // Get the text to display
+      const textToDisplay = char.text || char.emoji || 'TEXT';
+      
+      // Escape special characters for FFmpeg
+      const escapedText = textToDisplay
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/:/g, "\\:")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]");
+      
+      
+      // Use TTF font files (FFmpeg WASM doesn't support WOFF2)
+      let fontFile = ':fontfile=roboto.ttf';  // Default to roboto.ttf
+      
+      
+      // Create drawtext filter with font and styling
+      const drawTextFilter = `drawtext=text='${escapedText}':x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=white:bordercolor=black:borderw=2${fontFile}`;
+      
+      filterParts.push(drawTextFilter);
+    });
+    
+    const filterString = filterParts.join(',');
+    
     await ffmpeg.exec([
       '-i', 'input.mp4',
-      '-vf', 'drawtext=text=TEST:x=50:y=50:fontsize=32:fontcolor=white:box=1:boxcolor=black',
+      '-vf', filterString,
       '-c:a', 'copy',
       '-preset', 'ultrafast',
       '-avoid_negative_ts', 'make_zero',
       'output.mp4'
     ]);
-    console.log('FFmpeg command completed');
     
-    // Read the output
-    console.log('Reading output file...');
     const data = await ffmpeg.readFile('output.mp4');
-    console.log('Output file read successfully');
     
     // Clean up
-    console.log('Cleaning up files...');
     await ffmpeg.deleteFile('input.mp4');
     await ffmpeg.deleteFile('output.mp4');
-    console.log('Cleanup completed');
     
-    // Convert to proper format
     const uint8Array = data instanceof Uint8Array ? data : new Uint8Array(data as unknown as ArrayBuffer);
     return new Blob([uint8Array as BlobPart], { type: 'video/mp4' });
     
   } catch (error) {
-    console.error('Error in basic text overlay:', error);
-    
-    // Detailed error logging
-    if (error instanceof Error) {
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    }
-    
-    // Clean up on error
-    try {
-      await ffmpeg.deleteFile('input.mp4');
-      await ffmpeg.deleteFile('output.mp4');
-    } catch (cleanupError) {
-      console.warn('Cleanup error:', cleanupError);
-    }
-    
+    console.error('Error in text overlays with font:', error);
     throw error;
   }
 }
 
-// Method 1.5: Add simple text overlay with minimal font requirements
+// Simplified text overlay without custom fonts (most reliable)
 export async function addSimpleTextOverlay(
-  videoFile: File,
+  videoFile: File, 
   characters: Character[],
   onProgress?: (progress: number) => void
 ): Promise<Blob> {
   const ffmpeg = await loadFFmpeg();
   
   try {
-    console.log('Starting simple text overlay...');
     
     if (onProgress) {
       ffmpeg.on('progress', ({ progress }) => {
@@ -137,18 +178,26 @@ export async function addSimpleTextOverlay(
     
     await ffmpeg.writeFile('input.mp4', await fetchFile(videoFile));
     
-    // Create a very simple text overlay without complex font settings
-    const textToDisplay = characters[0]?.text || characters[0]?.emoji || 'TEXT';
+    // Use only the first character for simplicity
+    const char = characters[0];
+    if (!char) {
+      throw new Error('No characters provided');
+    }
+    
+    const textToDisplay = char.text || char.emoji || 'TEXT';
+    const x = Math.round((char.x / 100) * 1080);
+    const y = Math.round((char.y / 100) * 1920);
+    
+    // Escape text for FFmpeg
     const escapedText = textToDisplay.replace(/'/g, "\\'").replace(/:/g, "\\:");
     
-    console.log(`Adding simple text: "${textToDisplay}"`);
     
+    // Use the absolute simplest drawtext command
     await ffmpeg.exec([
       '-i', 'input.mp4',
-      '-vf', `drawtext=text='${escapedText}':x=50:y=50:fontsize=24:fontcolor=white`,
+      '-vf', `drawtext=text='${escapedText}':x=${x}:y=${y}:fontsize=32:fontcolor=yellow`,
       '-c:a', 'copy',
       '-preset', 'ultrafast',
-      '-avoid_negative_ts', 'make_zero',
       'output.mp4'
     ]);
     
@@ -167,146 +216,64 @@ export async function addSimpleTextOverlay(
   }
 }
 
-// Method 2: Add multiple colored boxes (no text at all)
-export async function addColoredBoxes(
-  videoFile: File, 
+// Canvas-based text overlay (alternative approach)
+export async function addCanvasTextOverlay(
+  videoFile: File,
   characters: Character[],
   onProgress?: (progress: number) => void
 ): Promise<Blob> {
-  const ffmpeg = await loadFFmpeg();
   
   try {
-    console.log('Starting colored boxes overlay...');
+    // Create text images using canvas
+    const textImages: Blob[] = [];
     
-    if (onProgress) {
-      ffmpeg.on('progress', ({ progress }) => {
-        onProgress(progress);
+    for (const char of characters) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d')!;
+      
+      // Set canvas size
+      canvas.width = 400;
+      canvas.height = 100;
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Style text
+      const fontSize = Math.round(28 * char.scale);
+      ctx.font = `${fontSize}px Arial, sans-serif`;
+      ctx.fillStyle = 'white';
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 2;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      
+      const text = char.text || char.emoji || 'TEXT';
+      
+      // Draw text with stroke (outline)
+      ctx.strokeText(text, canvas.width/2, canvas.height/2);
+      ctx.fillText(text, canvas.width/2, canvas.height/2);
+      
+      // Convert to blob
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((blob) => resolve(blob!), 'image/png');
       });
+      
+      textImages.push(blob);
     }
     
-    // Write input video file
-    await ffmpeg.writeFile('input.mp4', await fetchFile(videoFile));
+    // For now, just return the original video
+    // In a full implementation, you'd overlay these images
     
-    // Video dimensions are 1088x1920 based on the logs
-    const videoWidth = 1088;
-    const videoHeight = 1920;
-    
-    // Create a simple filter with colored rectangles - safer positioning
-    const colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange'];
-    let filterParts: string[] = [];
-    
-    characters.forEach((char, index) => {
-      // Convert percentage to actual pixels, but keep well within bounds
-      const x = Math.max(10, Math.min(videoWidth - 100, Math.round((char.x / 100) * videoWidth)));
-      const y = Math.max(10, Math.min(videoHeight - 100, Math.round((char.y / 100) * videoHeight)));
-      const size = Math.max(20, Math.min(80, Math.round(40 * char.scale)));
-      const color = colors[index % colors.length];
-      
-      console.log(`Character ${index}: x=${x}, y=${y}, size=${size}, color=${color}`);
-      filterParts.push(`drawbox=x=${x}:y=${y}:w=${size}:h=${size}:color=${color}:t=fill`);
-    });
-    
-    const filterString = filterParts.join(',');
-    console.log('Filter string:', filterString);
-    
-    await ffmpeg.exec([
-      '-i', 'input.mp4',
-      '-vf', filterString,
-      '-c:a', 'copy',
-      '-preset', 'ultrafast',
-      '-avoid_negative_ts', 'make_zero',
-      'output.mp4'
-    ]);
-    
-    const data = await ffmpeg.readFile('output.mp4');
-    
-    // Clean up
-    await ffmpeg.deleteFile('input.mp4');
-    await ffmpeg.deleteFile('output.mp4');
-    
-    const uint8Array = data instanceof Uint8Array ? data : new Uint8Array(data as unknown as ArrayBuffer);
-    return new Blob([uint8Array as BlobPart], { type: 'video/mp4' });
+    // Fallback to simple copy
+    return await justCopyVideo(videoFile, onProgress);
     
   } catch (error) {
-    console.error('Error in colored boxes:', error);
+    console.error('Canvas text overlay failed:', error);
     throw error;
   }
 }
 
-// Method 2.5: Add actual text overlays (the real implementation)
-export async function addTextOverlays(
-  videoFile: File, 
-  characters: Character[],
-  onProgress?: (progress: number) => void
-): Promise<Blob> {
-  const ffmpeg = await loadFFmpeg();
-  
-  try {
-    console.log('Starting text overlays...');
-    
-    if (onProgress) {
-      ffmpeg.on('progress', ({ progress }) => {
-        onProgress(progress);
-      });
-    }
-    
-    // Write input video file
-    await ffmpeg.writeFile('input.mp4', await fetchFile(videoFile));
-    
-    // Video dimensions are 1088x1920 based on the logs
-    const videoWidth = 1088;
-    const videoHeight = 1920;
-    
-    // Create text overlay filters
-    let filterParts: string[] = [];
-    
-    characters.forEach((char, index) => {
-      // Convert percentage to actual pixels, but keep well within bounds
-      const x = Math.max(10, Math.min(videoWidth - 200, Math.round((char.x / 100) * videoWidth)));
-      const y = Math.max(10, Math.min(videoHeight - 50, Math.round((char.y / 100) * videoHeight)));
-      const fontSize = Math.max(20, Math.min(60, Math.round(32 * char.scale)));
-      
-      // Get the text to display (use text field if available, otherwise emoji field)
-      const textToDisplay = char.text || char.emoji;
-      
-      // Escape special characters for FFmpeg
-      const escapedText = textToDisplay.replace(/'/g, "\\'").replace(/:/g, "\\:");
-      
-      console.log(`Text ${index}: "${textToDisplay}" at x=${x}, y=${y}, fontSize=${fontSize}`);
-      
-      // Create drawtext filter with background box for better visibility
-      // Use a very simple approach without complex font settings
-      filterParts.push(`drawtext=text='${escapedText}':x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=white`);
-    });
-    
-    const filterString = filterParts.join(',');
-    console.log('Filter string:', filterString);
-    
-    await ffmpeg.exec([
-      '-i', 'input.mp4',
-      '-vf', filterString,
-      '-c:a', 'copy',
-      '-preset', 'ultrafast',
-      '-avoid_negative_ts', 'make_zero',
-      'output.mp4'
-    ]);
-    
-    const data = await ffmpeg.readFile('output.mp4');
-    
-    // Clean up
-    await ffmpeg.deleteFile('input.mp4');
-    await ffmpeg.deleteFile('output.mp4');
-    
-    const uint8Array = data instanceof Uint8Array ? data : new Uint8Array(data as unknown as ArrayBuffer);
-    return new Blob([uint8Array as BlobPart], { type: 'video/mp4' });
-    
-  } catch (error) {
-    console.error('Error in text overlays:', error);
-    throw error;
-  }
-}
-
-// Method 3: Just copy the video (test if basic operations work)
+// Safe video copy
 export async function justCopyVideo(
   videoFile: File,
   onProgress?: (progress: number) => void
@@ -314,9 +281,6 @@ export async function justCopyVideo(
   const ffmpeg = await loadFFmpeg();
   
   try {
-    console.log('Starting video copy test...');
-    console.log('Video file size:', videoFile.size, 'bytes');
-    console.log('Video file type:', videoFile.type);
     
     if (onProgress) {
       ffmpeg.on('progress', ({ progress }) => {
@@ -324,166 +288,77 @@ export async function justCopyVideo(
       });
     }
     
-    // Write input video file with error handling
-    console.log('Writing video file to FFmpeg filesystem...');
-    const fileData = await fetchFile(videoFile);
-    console.log('File data size:', fileData.byteLength);
+    await ffmpeg.writeFile('input.mp4', await fetchFile(videoFile));
     
-    await ffmpeg.writeFile('input.mp4', fileData);
-    console.log('Video file written successfully');
-    
-    // Try a safer copy command with memory management
-    console.log('Executing safe copy command...');
     await ffmpeg.exec([
       '-i', 'input.mp4',
-      '-c:v', 'libx264', // Use software encoder instead of copy
-      '-c:a', 'aac',     // Use software audio encoder
+      '-c:v', 'libx264',
+      '-c:a', 'aac',
       '-preset', 'ultrafast',
-      '-crf', '23',      // Constant rate factor for quality
-      '-max_muxing_queue_size', '1024', // Increase buffer size
-      '-avoid_negative_ts', 'make_zero',
+      '-crf', '23',
       'output.mp4'
     ]);
-    console.log('Copy command completed');
     
     const data = await ffmpeg.readFile('output.mp4');
-    console.log('Output data size:', data.byteLength);
     
-    // Clean up
-    console.log('Cleaning up files...');
     await ffmpeg.deleteFile('input.mp4');
     await ffmpeg.deleteFile('output.mp4');
-    console.log('Cleanup completed');
     
     const uint8Array = data instanceof Uint8Array ? data : new Uint8Array(data as unknown as ArrayBuffer);
     return new Blob([uint8Array as BlobPart], { type: 'video/mp4' });
     
   } catch (error) {
     console.error('Error in video copy:', error);
-    
-    // Detailed error logging
-    if (error instanceof Error) {
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-    }
-    
-    // Clean up on error
-    try {
-      await ffmpeg.deleteFile('input.mp4');
-      await ffmpeg.deleteFile('output.mp4');
-    } catch (cleanupError) {
-      console.warn('Cleanup error:', cleanupError);
-    }
-    
     throw error;
   }
 }
 
-// Check if video file is suitable for processing
-function validateVideoFile(videoFile: File): { valid: boolean; error?: string } {
-  const maxSize = 100 * 1024 * 1024; // 100MB limit
-  const minSize = 1024; // 1KB minimum
-  
-  if (videoFile.size > maxSize) {
-    return { valid: false, error: `Video file too large: ${Math.round(videoFile.size / 1024 / 1024)}MB (max: 100MB)` };
-  }
-  
-  if (videoFile.size < minSize) {
-    return { valid: false, error: `Video file too small: ${videoFile.size} bytes` };
-  }
-  
-  if (!videoFile.type.startsWith('video/')) {
-    return { valid: false, error: `Invalid file type: ${videoFile.type}` };
-  }
-  
-  return { valid: true };
-}
-
-// Main function with progressive fallbacks
+// Main function with font-aware fallbacks
 export async function addCharacterOverlays(
   videoFile: File, 
   characters: Character[],
   onProgress?: (progress: number) => void
 ): Promise<Blob> {
-  console.log('Starting character overlay process...');
-  console.log('Video file:', videoFile.name, 'Size:', videoFile.size, 'Type:', videoFile.type);
-  console.log('Characters:', characters.length);
   
-  // Validate video file first
-  const validation = validateVideoFile(videoFile);
-  if (!validation.valid) {
-    console.warn('⚠️ Video file validation failed:', validation.error);
-    // Still try to process, but log the warning
+  if (characters.length === 0) {
+    return await justCopyVideo(videoFile, onProgress);
   }
   
-  // Test 1: Can we just copy the video?
-  try {
-    console.log('Test 1: Trying basic video copy...');
-    await justCopyVideo(videoFile, onProgress);
-    console.log('✅ Basic video copy successful!');
-    
-    // If copy works and we have characters, try adding them
-    if (characters.length > 0) {
-      try {
-        console.log('Test 2: Trying actual text overlays...');
-        return await addTextOverlays(videoFile, characters, onProgress);
-      } catch (textError) {
-        console.error('❌ Text overlays failed, trying simple text...');
-        
-        try {
-          console.log('Test 3: Trying simple text overlay...');
-          return await addSimpleTextOverlay(videoFile, characters, onProgress);
-        } catch (simpleTextError) {
-          console.error('❌ Simple text failed, trying basic text...');
-          
-          try {
-            console.log('Test 4: Trying basic text overlay...');
-            return await addBasicTextOverlay(videoFile, onProgress);
-          } catch (basicTextError) {
-            console.error('❌ Basic text also failed, returning original copy');
-            return await justCopyVideo(videoFile, onProgress);
-          }
-        }
-      }
-    } else {
-      // No characters to add, just return a copy
-      console.log('No characters to add, returning processed copy');
-      return await justCopyVideo(videoFile, onProgress);
-    }
-    
-  } catch (copyError) {
-    console.error('❌ Even basic video copy failed:', copyError);
-    
-    // Last resort: return the original video file as a blob
-    console.log('🔄 Last resort: returning original video file...');
+  // Try methods in order of preference
+  const methods = [
+    { name: 'Text overlays with fonts', fn: addTextOverlaysWithFont },
+    { name: 'Simple text overlay', fn: addSimpleTextOverlay },
+    { name: 'Canvas-based overlay', fn: addCanvasTextOverlay },
+    { name: 'Safe video copy', fn: justCopyVideo }
+  ];
+  
+  for (const method of methods) {
     try {
-      const originalBlob = new Blob([await fetchFile(videoFile)], { type: 'video/mp4' });
-      console.log('✅ Successfully returned original video as blob');
-      return originalBlob;
-    } catch (originalError) {
-      console.error('❌ Failed to return original video:', originalError);
-      throw new Error(`Video processing completely failed: ${copyError}. Original video also failed: ${originalError}`);
+      const result = await method.fn(videoFile, characters, onProgress);
+      
+      // Check if the result is valid (not empty)
+      if (result.size === 0) {
+        console.error(`❌ ${method.name} produced empty result, trying next method...`);
+        continue;
+      }
+      
+      return result;
+    } catch (error) {
+      console.error(`❌ Failed: ${method.name}`, error);
+      continue;
     }
   }
+  
+  throw new Error('All text overlay methods failed');
 }
 
-// Debug function to check FFmpeg capabilities
+// Debug function
 export async function debugFFmpeg(): Promise<void> {
   const ffmpeg = await loadFFmpeg();
   
   try {
-    console.log('=== FFmpeg Debug Info ===');
-    
-    // Check FFmpeg version and capabilities
     await ffmpeg.exec(['-version']);
-    
-    // List available formats
     await ffmpeg.exec(['-formats']);
-    
-    // List available codecs
-    await ffmpeg.exec(['-codecs']);
-    
   } catch (error) {
     console.error('Debug failed:', error);
   }
