@@ -359,7 +359,7 @@ export default function VideoProcessor({
         </div>
 
         {/* Debug Button */}
-        <div className="mb-4">
+        {/* <div className="mb-4">
           <button
             onClick={runDebug}
             disabled={!isLoaded || isDebugging}
@@ -377,7 +377,7 @@ export default function VideoProcessor({
               </>
             )}
           </button>
-        </div>
+        </div> */}
 
         {/* Error Display */}
         {error && (
