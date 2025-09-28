@@ -107,7 +107,7 @@ export default function CharacterSelector({
               <div key={character.id} className="bg-white/5 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-white flex items-center gap-2">
-                    <span className="text-sm bg-blue-500/20 px-2 py-1 rounded">"{character.emoji}"</span>
+                    <span className="text-sm bg-blue-500/20 px-2 py-1 rounded">{character.emoji}</span>
                     Text Overlay
                   </span>
                   <button

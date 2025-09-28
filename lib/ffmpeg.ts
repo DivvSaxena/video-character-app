@@ -104,9 +104,9 @@ export async function addTextOverlaysWithFont(
     const videoHeight = 1920;
     
     // Create text overlay filters
-    let filterParts: string[] = [];
+    const filterParts: string[] = [];
     
-    characters.forEach((char, index) => {
+    characters.forEach((char) => {
       // Convert percentage to actual pixels
       const x = Math.max(20, Math.min(videoWidth - 200, Math.round((char.x / 100) * videoWidth)));
       const y = Math.max(30, Math.min(videoHeight - 60, Math.round((char.y / 100) * videoHeight)));
@@ -125,7 +125,7 @@ export async function addTextOverlaysWithFont(
       
       
       // Use TTF font files (FFmpeg WASM doesn't support WOFF2)
-      let fontFile = ':fontfile=roboto.ttf';  // Default to roboto.ttf
+      const fontFile = ':fontfile=roboto.ttf';  // Default to roboto.ttf
       
       
       // Create drawtext filter with font and styling
@@ -326,15 +326,20 @@ export async function addCharacterOverlays(
   
   // Try methods in order of preference
   const methods = [
-    { name: 'Text overlays with fonts', fn: addTextOverlaysWithFont },
-    { name: 'Simple text overlay', fn: addSimpleTextOverlay },
-    { name: 'Canvas-based overlay', fn: addCanvasTextOverlay },
-    { name: 'Safe video copy', fn: justCopyVideo }
+    { name: 'Text overlays with fonts', fn: addTextOverlaysWithFont, needsCharacters: true },
+    { name: 'Simple text overlay', fn: addSimpleTextOverlay, needsCharacters: true },
+    { name: 'Canvas-based overlay', fn: addCanvasTextOverlay, needsCharacters: true },
+    { name: 'Safe video copy', fn: justCopyVideo, needsCharacters: false }
   ];
   
   for (const method of methods) {
     try {
-      const result = await method.fn(videoFile, characters, onProgress);
+      let result: Blob;
+      if (method.needsCharacters) {
+        result = await (method.fn as (videoFile: File, characters: Character[], onProgress?: (progress: number) => void) => Promise<Blob>)(videoFile, characters, onProgress);
+      } else {
+        result = await (method.fn as (videoFile: File, onProgress?: (progress: number) => void) => Promise<Blob>)(videoFile, onProgress);
+      }
       
       // Check if the result is valid (not empty)
       if (result.size === 0) {
